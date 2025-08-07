@@ -13,7 +13,7 @@ st.set_page_config(layout="wide")
 st.title("🌿 NDVI Dashboard – Somali Region (Ethiopia)")
 
 # --- File paths ---
-ndvi_tif = "somali_ndvi_2023.tif"
+ndvi_tif = "https://www.dropbox.com/scl/fi/ix66owv7zvun7j9vau3lv/somali_ndvi_2023.tif?rlkey=2i9up9btd9oskh23ilx3vodid&st=f7qqy6if&dl=1"
 shapefile = "somali_woredas.geojson"  # You can replace with .shp if needed
 
 # --- Load shapefile ---
@@ -91,4 +91,5 @@ st.download_button(
     data=csv,
     file_name="ndvi_by_woreda_2023.csv",
     mime="text/csv"
+
 )
