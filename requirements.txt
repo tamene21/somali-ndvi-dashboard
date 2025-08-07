@@ -8,3 +8,4 @@ rasterstats
 localtileserver
 folium
 setuptools
+xarray
