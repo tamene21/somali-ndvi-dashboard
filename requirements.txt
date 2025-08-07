@@ -1,0 +1,9 @@
+streamlit
+rasterio
+geopandas
+numpy
+pandas
+leafmap
+rasterstats
+localtileserver
+folium
