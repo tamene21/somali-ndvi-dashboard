@@ -7,3 +7,4 @@ leafmap
 rasterstats
 localtileserver
 folium
+setuptools
