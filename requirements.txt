@@ -9,3 +9,4 @@ localtileserver
 folium
 setuptools
 xarray
+psutil
