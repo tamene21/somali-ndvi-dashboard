@@ -244,7 +244,7 @@ from branca.colormap import linear, StepColormap
 
 # ----------------- STREAMLIT CONFIG -----------------
 st.set_page_config(layout="wide")
-st.title("💧🌱 SMI and NDVI Dashboard – Somali Region (Ethiopia)")
+st.title("SMI and NDVI Dashboard – Somali Region (Ethiopia)")
 
 # ----------------- FILE PATHS -----------------
 SHAPEFILE = "somali_woredas.geojson"
@@ -286,7 +286,7 @@ elif data_type == "NDVI":
 elif data_type == "Weighted Overlay":
     files_to_use = SMI_FILES
 
-st.sidebar.header("🔍 Year Selection")
+st.sidebar.header("Year Selection")
 selected_year = st.sidebar.selectbox(
     f"Choose a year to view {data_type} data",
     options=list(files_to_use.keys()),
@@ -294,7 +294,7 @@ selected_year = st.sidebar.selectbox(
 )
 
 if data_type == "Weighted Overlay":
-    st.sidebar.header("⚖️ Set Weights for Overlay")
+    st.sidebar.header(" Set Weights for Overlay")
     smi_weight = st.sidebar.slider("SMI Weight", 0.0, 1.0, 0.5, 0.05)
     ndvi_weight = 1.0 - smi_weight
     st.sidebar.markdown(f"NDVI Weight: **{ndvi_weight:.2f}**")
@@ -415,7 +415,6 @@ def create_diff_raster(year_path, multi_path):
     if not year_path or not multi_path:
         return None
 
-    # CORRECTION: The variable 'multi_path' should be used here, not 'multi_src'
     with rasterio.open(year_path) as year_src, rasterio.open(multi_path) as multi_src:
         year_data = year_src.read(1)
         multi_data = multi_src.read(1)
@@ -453,33 +452,12 @@ if show_difference and masked_tif_multi:
     diff_tif = create_diff_raster(masked_tif_year, masked_tif_multi)
 
 # ----------------- ZONAL STATISTICS -----------------
-st.sidebar.header("📊 Zonal Statistics")
+#st.sidebar.header("📊 Zonal Statistics")
 
 @st.cache_data
 def calculate_zonal_stats(_gdf, raster_path):
     if not raster_path:
         return []
-
-    # Check for NDVI data type and apply scaling before zonal stats
-    if data_type == "NDVI" and "MODIS" in raster_path:
-        with rasterio.open(raster_path) as src:
-            data = src.read(1).astype(np.float32) / NDVI_SCALE_FACTOR
-            meta = src.meta.copy()
-            meta.update({"dtype": 'float32', "nodata": np.nan})
-
-            temp_path = f"scaled_{os.path.basename(raster_path)}_{uuid.uuid4()}.tif"
-            with rasterio.open(temp_path, "w", **meta) as dst:
-                dst.write(data, 1)
-
-            stats = zonal_stats(
-                vectors=_gdf,
-                raster=temp_path,
-                stats=["mean"],
-                geojson_out=True,
-                nodata=np.nan
-            )
-            os.remove(temp_path)
-            return stats
 
     return zonal_stats(
         vectors=_gdf,
@@ -489,35 +467,64 @@ def calculate_zonal_stats(_gdf, raster_path):
         nodata=np.nan
     )
 
-zs_year = calculate_zonal_stats(gdf, masked_tif_year)
-zs_gdf_year = gpd.GeoDataFrame.from_features(zs_year)
-if not zs_gdf_year.empty:
-    zs_gdf_year["mean"] = zs_gdf_year["mean"].round(3)
+# Determine which data to use for the map and chart
+zs_gdf_to_map = None
+map_title_suffix = ""
 
+if show_difference and diff_tif is not None:
+    zs_diff = calculate_zonal_stats(gdf, diff_tif)
+    zs_gdf_to_map = gpd.GeoDataFrame.from_features(zs_diff)
+    map_title_suffix = " (Difference)"
+else:
+    zs_year = calculate_zonal_stats(gdf, masked_tif_year)
+    zs_gdf_to_map = gpd.GeoDataFrame.from_features(zs_year)
+    map_title_suffix = ""
+
+# Calculate stats for multi-year comparison
 zs_gdf_multi = None
 if show_multi_year and masked_tif_multi:
     zs_multi = calculate_zonal_stats(gdf, masked_tif_multi)
     zs_gdf_multi = gpd.GeoDataFrame.from_features(zs_multi)
-    if not zs_gdf_multi.empty:
-        zs_gdf_multi["mean"] = zs_gdf_multi["mean"].round(3)
+
+# Apply scaling to the mean column for NDVI data *after* zonal stats
+if data_type == "NDVI":
+    if not zs_gdf_to_map.empty and 'mean' in zs_gdf_to_map.columns:
+        zs_gdf_to_map["mean"] = zs_gdf_to_map["mean"] / NDVI_SCALE_FACTOR
+    if zs_gdf_multi is not None and not zs_gdf_multi.empty and 'mean' in zs_gdf_multi.columns:
+        zs_gdf_multi["mean"] = zs_gdf_multi["mean"] / NDVI_SCALE_FACTOR
+
+if not zs_gdf_to_map.empty:
+    zs_gdf_to_map["mean"] = zs_gdf_to_map["mean"].round(3)
+
+if zs_gdf_multi is not None and not zs_gdf_multi.empty:
+    zs_gdf_multi["mean"] = zs_gdf_multi["mean"].round(3)
+
 
 # ----------------- INTERACTIVE MAP -----------------
-st.subheader(f"🗺️ Graduated {data_type} Map – {selected_year}")
+st.subheader(f" Graduated {data_type} Map – {selected_year}{map_title_suffix}")
 m = leafmap.Map(center=[6.5, 45.5], zoom=6, basemap="CartoDB.Positron")
 
 # Check for a valid data range before trying to create a colormap
-if not zs_gdf_year.empty and 'mean' in zs_gdf_year.columns and zs_gdf_year['mean'].notna().any():
+if not zs_gdf_to_map.empty and 'mean' in zs_gdf_to_map.columns and zs_gdf_to_map['mean'].notna().any():
 
     # Define a custom color palette for each data type
-    if data_type == "SMI":
+    if show_difference and diff_tif is not None:
+        # Divergent palette for difference map (red for decrease, green for increase)
+        colors = ['#d73027', '#fc8d59', '#fee090', '#e0f3f8', '#91bfdb', '#4575b4']
+        caption_text = f"Mean {data_type} Difference by Woreda"
+    elif data_type == "SMI":
         colors = ['#fee0d2', '#fc9272', '#de2d26', '#a50f15']
+        caption_text = f"Mean {data_type} by Woreda ({selected_year}) - Quantile Classification"
     elif data_type == "NDVI":
         colors = ['#c7e9c0', '#a1d99b', '#41ab5d', '#006d2c']
+        caption_text = f"Mean {data_type} by Woreda ({selected_year}) - Quantile Classification"
     else: # Weighted Overlay
         colors = ['#e0f3db', '#a8ddb5', '#43a2ca', '#08589e']
+        caption_text = f"Mean {data_type} by Woreda ({selected_year}) - Quantile Classification"
+
 
     # Get the data to classify and drop NaN values
-    data_to_classify = zs_gdf_year['mean'].dropna()
+    data_to_classify = zs_gdf_to_map['mean'].dropna()
 
     # Create 4 quantile-based classes
     try:
@@ -533,7 +540,7 @@ if not zs_gdf_year.empty and 'mean' in zs_gdf_year.columns and zs_gdf_year['mean
             index=bins,
             vmin=bins[0],
             vmax=bins[-1],
-            caption=f"Mean {data_type} by Woreda ({selected_year}) - Quantile Classification"
+            caption=caption_text
         )
 
         def style_woreda(feature):
@@ -548,8 +555,8 @@ if not zs_gdf_year.empty and 'mean' in zs_gdf_year.columns and zs_gdf_year['mean
             }
 
         m.add_gdf(
-            zs_gdf_year,
-            layer_name=f"{data_type} {selected_year} (Classified)",
+            zs_gdf_to_map,
+            layer_name=f"{data_type} {selected_year}{map_title_suffix} (Classified)",
             style_function=style_woreda,
             info_mode="on_hover",
         )
@@ -563,7 +570,10 @@ if not zs_gdf_year.empty and 'mean' in zs_gdf_year.columns and zs_gdf_year['mean
         # Fallback to a continuous colormap
         min_val = data_to_classify.min()
         max_val = data_to_classify.max()
-        if data_type == "SMI":
+        if show_difference and diff_tif is not None:
+             colormap = linear.RdBu_05.scale(min_val, max_val)
+             colormap.caption = f"Mean Difference ({min_val:.2f} to {max_val:.2f})"
+        elif data_type == "SMI":
             colormap = linear.YlOrBr_05.scale(min_val, max_val)
             colormap.caption = f"Mean SMI ({min_val:.2f} to {max_val:.2f})"
         elif data_type == "NDVI":
@@ -585,8 +595,8 @@ if not zs_gdf_year.empty and 'mean' in zs_gdf_year.columns and zs_gdf_year['mean
             }
 
         m.add_gdf(
-            zs_gdf_year,
-            layer_name=f"{data_type} {selected_year} (Graduated)",
+            zs_gdf_to_map,
+            layer_name=f"{data_type} {selected_year}{map_title_suffix} (Graduated)",
             style_function=style_woreda_continuous,
             info_mode="on_hover",
         )
@@ -598,16 +608,19 @@ else:
 m.to_streamlit(height=600, width=1200)
 
 # ----------------- CHARTS -----------------
-st.subheader(f"📈 {data_type} Line Chart")
+st.subheader(f"{data_type} Line Chart")
 
-chart_df = zs_gdf_year[["admin3Name", "mean"]].rename(columns={"admin3Name": "Woreda", "mean": f"{selected_year} Mean {data_type}"})
+chart_df = zs_gdf_to_map[["admin3Name", "mean"]].rename(columns={"admin3Name": "Woreda", "mean": f"{selected_year} Mean {data_type}"})
+
 if show_multi_year and zs_gdf_multi is not None:
     zs_gdf_multi_renamed = zs_gdf_multi[["admin3Name", "mean"]].rename(columns={"admin3Name": "Woreda", "mean": f"Multi-Year Mean {data_type}"})
     chart_df = chart_df.merge(zs_gdf_multi_renamed, on="Woreda")
 
-if show_difference and zs_gdf_multi is not None:
-    diff_df = zs_gdf_year[["admin3Name", "mean"]].copy()
-    diff_df["mean"] = zs_gdf_year["mean"] - zs_gdf_multi["mean"]
+# if show_difference is checked, the main chart shows difference data, so we don't need a separate difference column.
+if not show_difference and zs_gdf_multi is not None:
+    diff_df = zs_gdf_to_map[["admin3Name", "mean"]].copy()
+    # Correctly subtract the multi-year mean from the current year's data
+    diff_df["mean"] = zs_gdf_to_map["mean"] - zs_gdf_multi["mean"]
     diff_df = diff_df.rename(columns={"admin3Name": "Woreda", "mean": "Difference"})
     chart_df = chart_df.merge(diff_df, on="Woreda")
 
@@ -623,45 +636,34 @@ fig = px.line(
 st.plotly_chart(fig, use_container_width=True)
 
 # ----------------- SUMMARY TABLES -----------------
-if show_multi_year and zs_gdf_multi is not None:
+st.subheader(f"Zonal Statistics Table")
+
+if show_difference and diff_tif is not None:
+    summary_df_diff = zs_gdf_to_map[["admin3Name", "mean"]].rename(columns={
+        "admin3Name": "Woreda",
+        "mean": f"Mean {data_type} Difference"
+    })
+    st.dataframe(summary_df_diff)
+elif show_multi_year and zs_gdf_multi is not None:
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader(f"📋 Mean {data_type} – {selected_year}")
-        summary_df_year = zs_gdf_year[["admin3Name", "mean"]].rename(columns={
+        st.subheader(f"Mean {data_type} – {selected_year}")
+        summary_df_year = zs_gdf_to_map[["admin3Name", "mean"]].rename(columns={
             "admin3Name": "Woreda",
             "mean": f"Mean {data_type}"
         })
         st.dataframe(summary_df_year)
     with col2:
-        st.subheader(f"📋 Multi-Year Mean {data_type} (2021–2025)")
+        st.subheader(f"Multi-Year Mean {data_type} (2021–2025)")
         summary_df_multi = zs_gdf_multi[["admin3Name", "mean"]].rename(columns={
             "admin3Name": "Woreda",
             "mean": f"Mean {data_type}"
         })
         st.dataframe(summary_df_multi)
 else:
-    st.subheader(f"📋 Mean {data_type} per Woreda – {selected_year}")
-    summary_df_year = zs_gdf_year[["admin3Name", "mean"]].rename(columns={
+    summary_df_year = zs_gdf_to_map[["admin3Name", "mean"]].rename(columns={
             "admin3Name": "Woreda",
             "mean": f"Mean {data_type}"
         })
     st.dataframe(summary_df_year)
 
-# ----------------- DOWNLOAD BUTTONS -----------------
-if not summary_df_year.empty:
-    csv = summary_df_year.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label=f"📥 Download {data_type} by Woreda ({selected_year})",
-        data=csv,
-        file_name=f"{data_type}_by_woreda_{selected_year}.csv",
-        mime="text/csv"
-    )
-
-if show_multi_year and zs_gdf_multi is not None and not zs_gdf_multi.empty:
-    csv_multi = zs_gdf_multi.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label=f"📥 Download Multi-Year Mean {data_type} (2021–2025)",
-        data=csv_multi,
-        file_name=f"{data_type}_by_woreda_multi_year_mean.csv",
-        mime="text/csv"
-    )
